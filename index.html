@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Pothole Alert Map</title>
+
+<link rel="stylesheet"
+href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+
+body{
+margin:0;
+font-family:Arial;
+}
+
+#map{
+height:100vh;
+width:100%;
+}
+
+#alert{
+position:fixed;
+bottom:20px;
+left:50%;
+transform:translateX(-50%);
+background:red;
+color:white;
+padding:12px 20px;
+border-radius:10px;
+font-size:18px;
+display:none;
+z-index:1000;
+}
+
+#status{
+position:fixed;
+top:10px;
+left:50%;
+transform:translateX(-50%);
+background:black;
+color:white;
+padding:8px 16px;
+border-radius:10px;
+z-index:1000;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div id="status">Loading map...</div>
+<div id="map"></div>
+<div id="alert">⚠️ Pothole Ahead</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<script>
+
+/* ---------------- Firebase Config ---------------- */
+
+const firebaseConfig = {
+
+apiKey:"AIzaSyAwKllcXDSpn7PwvogeFmpYHZhLO-zdmVM",
+
+authDomain:"thirumalaivasan-bb5d4.firebaseapp.com",
+
+databaseURL:"https://thirumalaivasan-bb5d4-default-rtdb.firebaseio.com",
+
+projectId:"thirumalaivasan-bb5d4"
+
+};
+
+firebase.initializeApp(firebaseConfig);
+
+const db = firebase.database();
+
+
+/* ---------------- Map ---------------- */
+
+const map = L.map('map').setView([13.0827,80.2707],13);
+
+L.tileLayer(
+'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+{
+maxZoom:19
+}).addTo(map);
+
+
+/* ---------------- Variables ---------------- */
+
+let potholes=[];
+let markers=[];
+let userMarker;
+
+let userLat;
+let userLng;
+
+const ALERT_DISTANCE = 200;
+
+
+/* ---------------- Load potholes from Firebase ---------------- */
+
+function loadPotholes(){
+
+db.ref("/potholes").on("value",(snapshot)=>{
+
+markers.forEach(m=>map.removeLayer(m));
+markers=[];
+
+const data=snapshot.val();
+
+if(!data){
+document.getElementById("status").innerText="No potholes";
+return;
+}
+
+Object.values(data).forEach(year=>{
+
+Object.values(year).forEach(month=>{
+
+Object.values(month).forEach(p=>{
+
+if(!p.location)return;
+
+const lat=p.location.lat;
+const lng=p.location.lng;
+
+const shock=p.imu?.shock || 0;
+
+let color="green";
+
+if(shock>15) color="red";
+else if(shock>12) color="orange";
+
+const marker=L.circleMarker([lat,lng],{
+
+radius:8,
+fillColor:color,
+color:"white",
+weight:2,
+fillOpacity:0.9
+
+}).addTo(map);
+
+marker.bindPopup(
+"Pothole<br>"+
+"Shock:"+shock.toFixed(1)
+);
+
+markers.push(marker);
+
+});
+
+});
+
+});
+
+document.getElementById("status").innerText =
+markers.length + " potholes loaded";
+
+});
+
+}
+
+
+/* ---------------- User GPS ---------------- */
+
+function trackUser(){
+
+if(!navigator.geolocation){
+
+alert("GPS not supported");
+return;
+
+}
+
+navigator.geolocation.watchPosition(
+
+function(pos){
+
+userLat = pos.coords.latitude;
+userLng = pos.coords.longitude;
+
+document.getElementById("status").innerText =
+"GPS Active";
+
+if(!userMarker){
+
+userMarker=L.circleMarker([userLat,userLng],{
+
+radius:10,
+fillColor:"#3b82f6",
+color:"white",
+weight:3,
+fillOpacity:1
+
+}).addTo(map).bindPopup("You are here");
+
+map.setView([userLat,userLng],17);
+
+}else{
+
+userMarker.setLatLng([userLat,userLng]);
+
+}
+
+checkDistance();
+
+},
+
+function(error){
+
+console.log(error);
+
+document.getElementById("status").innerText =
+"Location permission required";
+
+},
+
+{
+
+enableHighAccuracy:true,
+maximumAge:0,
+timeout:10000
+
+}
+
+);
+
+}
+
+/* ---------------- Distance calculation ---------------- */
+
+function getDistance(lat1,lon1,lat2,lon2){
+
+const R=6371000;
+
+const dLat=(lat2-lat1)*Math.PI/180;
+const dLon=(lon2-lon1)*Math.PI/180;
+
+const a=
+Math.sin(dLat/2)*Math.sin(dLat/2)+
+Math.cos(lat1*Math.PI/180)*
+Math.cos(lat2*Math.PI/180)*
+Math.sin(dLon/2)*Math.sin(dLon/2);
+
+return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+
+}
+
+
+/* ---------------- Alert Logic ---------------- */
+
+function checkDistance(){
+
+if(userLat==undefined)return;
+
+let min=Infinity;
+
+markers.forEach(marker=>{
+
+const pos=marker.getLatLng();
+
+const d=getDistance(userLat,userLng,pos.lat,pos.lng);
+
+if(d<min)min=d;
+
+});
+
+const alertBox=document.getElementById("alert");
+
+if(min<=ALERT_DISTANCE){
+
+alertBox.style.display="block";
+alertBox.innerText="⚠️ Pothole "+Math.round(min)+"m Ahead";
+
+if(navigator.vibrate)
+navigator.vibrate([300,100,300]);
+
+}else{
+
+alertBox.style.display="none";
+
+}
+
+}
+
+
+/* ---------------- Start ---------------- */
+
+loadPotholes();
+trackUser();
+
+</script>
+
+</body>
+</html>
